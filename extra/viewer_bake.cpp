@@ -279,8 +279,10 @@ struct BakeOptions
 	bool fitToWindow = true;
 	float scale = 1.0f;
 	bx::Vec3 skyColor = bx::Vec3(1.0f);
-	int maxDepth = 10;
+	int maxDepth = 8;
 };
+
+static const int kMaxDepth = 16;
 
 struct SampleLocation
 {
@@ -293,7 +295,7 @@ struct TexelData
 {
 	bx::Vec3 accumColor;
 	uint32_t numColorSamples;
-	int numPathsTraced;
+	int numPathsTraced; // Seed for randomDirHemisphere.
 	float randomOffset[2];
 };
 
@@ -323,7 +325,6 @@ struct
 	std::vector<TexelData> texels;
 	std::vector<float> lightmapData;
 	std::atomic<uint32_t> numTrianglesRasterized;
-	std::atomic<uint32_t> numSampleLocationsProcessed;
 	std::atomic<uint32_t> samplesPerTexelCount;
 	uint32_t numRaysTraced;
 	bx::RngMwc rng;
@@ -338,6 +339,8 @@ struct
 	uint32_t updateFinishedFrameNo;
 }
 s_bake;
+	
+static thread_local bx::RngMwc s_rng;
 
 #define EMBREE_LIB "embree3.dll"
 
@@ -346,6 +349,7 @@ namespace embree
 	typedef RTCDevice (*NewDeviceFunc)(const char* config);
 	typedef void (*ReleaseDeviceFunc)(RTCDevice device);
 	typedef void (*SetDeviceErrorFunctionFunc)(RTCDevice device, RTCErrorFunction error, void* userPtr);
+	typedef ssize_t (*GetDevicePropertyFunc)(RTCDevice device, enum RTCDeviceProperty prop);
 	typedef RTCScene (*NewSceneFunc)(RTCDevice device);
 	typedef void (*ReleaseSceneFunc)(RTCScene scene);
 	typedef unsigned int (*AttachGeometryFunc)(RTCScene scene, RTCGeometry geometry);
@@ -355,6 +359,9 @@ namespace embree
 	typedef void (*SetSharedGeometryBufferFunc)(RTCGeometry geometry, enum RTCBufferType type, unsigned int slot, enum RTCFormat format, const void* ptr, size_t byteOffset, size_t byteStride, size_t itemCount);
 	typedef void (*CommitGeometryFunc)(RTCGeometry geometry);
 	typedef void (*Intersect1Func)(RTCScene scene, struct RTCIntersectContext* context, struct RTCRayHit* rayhit);
+	typedef void (*Intersect4Func)(const int* valid, RTCScene scene, struct RTCIntersectContext* context, struct RTCRayHit4* rayhit);
+	typedef void (*Intersect8Func)(const int* valid, RTCScene scene, struct RTCIntersectContext* context, struct RTCRayHit8* rayhit);
+	typedef void (*Intersect16Func)(const int* valid, RTCScene scene, struct RTCIntersectContext* context, struct RTCRayHit16* rayhit);
 	typedef void (*Occluded1Func)(RTCScene scene, struct RTCIntersectContext* context, struct RTCRay* ray);
 	typedef void (*Occluded4Func)(const int* valid, RTCScene scene, struct RTCIntersectContext* context, struct RTCRay4* ray);
 	typedef void (*Occluded8Func)(const int* valid, RTCScene scene, struct RTCIntersectContext* context, struct RTCRay8* ray);
@@ -362,6 +369,7 @@ namespace embree
 	NewDeviceFunc NewDevice;
 	ReleaseDeviceFunc ReleaseDevice;
 	SetDeviceErrorFunctionFunc SetDeviceErrorFunction;
+	GetDevicePropertyFunc GetDeviceProperty;
 	NewSceneFunc NewScene;
 	ReleaseSceneFunc ReleaseScene;
 	AttachGeometryFunc AttachGeometry;
@@ -371,6 +379,9 @@ namespace embree
 	SetSharedGeometryBufferFunc SetSharedGeometryBuffer;
 	CommitGeometryFunc CommitGeometry;
 	Intersect1Func Intersect1;
+	Intersect4Func Intersect4;
+	Intersect8Func Intersect8;
+	Intersect16Func Intersect16;
 	Occluded1Func Occluded1;
 	Occluded4Func Occluded4;
 	Occluded8Func Occluded8;
@@ -395,6 +406,7 @@ static bool bakeInitEmbree()
 		embree::NewDevice = (embree::NewDeviceFunc)bx::dlsym(s_bake.embreeLibrary, "rtcNewDevice");
 		embree::ReleaseDevice = (embree::ReleaseDeviceFunc)bx::dlsym(s_bake.embreeLibrary, "rtcReleaseDevice");
 		embree::SetDeviceErrorFunction = (embree::SetDeviceErrorFunctionFunc)bx::dlsym(s_bake.embreeLibrary, "rtcSetDeviceErrorFunction");
+		embree::GetDeviceProperty = (embree::GetDevicePropertyFunc)bx::dlsym(s_bake.embreeLibrary, "rtcGetDeviceProperty");
 		embree::NewScene = (embree::NewSceneFunc)bx::dlsym(s_bake.embreeLibrary, "rtcNewScene");
 		embree::ReleaseScene = (embree::ReleaseSceneFunc)bx::dlsym(s_bake.embreeLibrary, "rtcReleaseScene");
 		embree::AttachGeometry = (embree::AttachGeometryFunc)bx::dlsym(s_bake.embreeLibrary, "rtcAttachGeometry");
@@ -404,6 +416,9 @@ static bool bakeInitEmbree()
 		embree::SetSharedGeometryBuffer = (embree::SetSharedGeometryBufferFunc)bx::dlsym(s_bake.embreeLibrary, "rtcSetSharedGeometryBuffer");
 		embree::CommitGeometry = (embree::CommitGeometryFunc)bx::dlsym(s_bake.embreeLibrary, "rtcCommitGeometry");
 		embree::Intersect1 = (embree::Intersect1Func)bx::dlsym(s_bake.embreeLibrary, "rtcIntersect1");
+		embree::Intersect4 = (embree::Intersect4Func)bx::dlsym(s_bake.embreeLibrary, "rtcIntersect4");
+		embree::Intersect8 = (embree::Intersect8Func)bx::dlsym(s_bake.embreeLibrary, "rtcIntersect8");
+		embree::Intersect16 = (embree::Intersect16Func)bx::dlsym(s_bake.embreeLibrary, "rtcIntersect16");
 		embree::Occluded1 = (embree::Occluded1Func)bx::dlsym(s_bake.embreeLibrary, "rtcOccluded1");
 		embree::Occluded4 = (embree::Occluded4Func)bx::dlsym(s_bake.embreeLibrary, "rtcOccluded4");
 		embree::Occluded8 = (embree::Occluded8Func)bx::dlsym(s_bake.embreeLibrary, "rtcOccluded8");
@@ -417,6 +432,20 @@ static bool bakeInitEmbree()
 			return false;
 		}
 		embree::SetDeviceErrorFunction(s_bake.embreeDevice, bakeEmbreeError, nullptr);
+		int version[3];
+		for (int i = 0; i < 3; i++)
+			version[i] = (int)embree::GetDeviceProperty(s_bake.embreeDevice, RTCDeviceProperty(RTC_DEVICE_PROPERTY_VERSION_MAJOR + i));
+		printf("Embree version %d.%d.%d\n", version[0], version[1], version[2]);
+		if (version[0] != RTC_VERSION_MAJOR || version[1] != RTC_VERSION_MINOR || version[2] != RTC_VERSION_PATCH)
+			printf("   Expected version is %d.%d.%d\n", RTC_VERSION_MAJOR, RTC_VERSION_MINOR, RTC_VERSION_PATCH);
+		if (embree::GetDeviceProperty(s_bake.embreeDevice, RTC_DEVICE_PROPERTY_NATIVE_RAY4_SUPPORTED))
+			printf("   RTC_DEVICE_PROPERTY_NATIVE_RAY4_SUPPORTED\n");
+		if (embree::GetDeviceProperty(s_bake.embreeDevice, RTC_DEVICE_PROPERTY_NATIVE_RAY8_SUPPORTED))
+			printf("   RTC_DEVICE_PROPERTY_NATIVE_RAY8_SUPPORTED\n");
+		if (embree::GetDeviceProperty(s_bake.embreeDevice, RTC_DEVICE_PROPERTY_NATIVE_RAY16_SUPPORTED))
+			printf("   RTC_DEVICE_PROPERTY_NATIVE_RAY16_SUPPORTED\n");
+		if (embree::GetDeviceProperty(s_bake.embreeDevice, RTC_DEVICE_PROPERTY_RAY_STREAM_SUPPORTED))
+			printf("   RTC_DEVICE_PROPERTY_RAY_STREAM_SUPPORTED\n");
 		s_bake.embreeGeometry = embree::NewGeometry(s_bake.embreeDevice, RTC_GEOMETRY_TYPE_TRIANGLE);
 		const objzModel *model = modelGetData();
 		embree::SetSharedGeometryBuffer(s_bake.embreeGeometry, RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT3, model->vertices, offsetof(ModelVertex, pos), sizeof(ModelVertex), (size_t)model->numVertices);
@@ -543,86 +572,100 @@ static bx::Vec3 randomDirHemisphere(int index, const float *offset, bx::Vec3 nor
 }
 
 // https://github.com/aras-p/ToyPathTracer
-static bx::Vec3 bakeTraceRay(bx::Vec3 origin, bx::Vec3 dir, TexelData &texel, int depth, const float near)
-{
-	RTCIntersectContext context;
-	rtcInitIntersectContext(&context);
-	RTCRayHit rh;
-	rh.ray.org_x = origin.x;
-	rh.ray.org_y = origin.y;
-	rh.ray.org_z = origin.z;
-	rh.ray.dir_x = dir.x;
-	rh.ray.dir_y = dir.y;
-	rh.ray.dir_z = dir.z;
-	rh.ray.tnear = near;
-	rh.ray.tfar = FLT_MAX;
-	rh.ray.flags = 0;
-	rh.ray.id = 0;
-	rh.ray.mask = 0;
-	rh.hit.geomID = RTC_INVALID_GEOMETRY_ID;
-	rh.hit.primID = RTC_INVALID_GEOMETRY_ID;
-	embree::Intersect1(s_bake.embreeScene, &context, &rh);
-	s_bake.numRaysTraced++;
-	texel.numPathsTraced++;
-	if (rh.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
-		// Ray missed, use sky color.
-		return s_bake.options.skyColor;
-	}
-	if (depth < s_bake.options.maxDepth) {
-		const uint32_t *indices = atlasGetIndices()->data();
-		const ModelVertex *vertices = atlasGetVertices()->data();
-		const ModelVertex &v0 = vertices[indices[rh.hit.primID * 3 + 0]];
-		const ModelVertex &v1 = vertices[indices[rh.hit.primID * 3 + 1]];
-		const ModelVertex &v2 = vertices[indices[rh.hit.primID * 3 + 2]];
-		// we got a new ray bounced from the surface; recursively trace it
-		bx::Vec3 diffuse = bx::Vec3(0.5f);
-		bx::Vec3 emission(0.0f);
-		const objzMaterial *mat = s_bake.triMaterials[rh.hit.primID];
-		if (mat) {
-			diffuse = bx::Vec3(mat->diffuse[0], mat->diffuse[1], mat->diffuse[2]);
-			emission = bx::Vec3(mat->emission[0], mat->emission[1], mat->emission[2]);
-			float uv[2];
-			for (int i = 0; i < 2; i++)
-				uv[i] = v0.texcoord[i] + (v1.texcoord[i] - v0.texcoord[i]) * rh.hit.u + (v2.texcoord[i] - v0.texcoord[i]) * rh.hit.v;
-			bx::Vec3 sample;
-			if (modelSampleMaterialDiffuse(mat, uv, &sample))
-				diffuse = diffuse * sample;
-			if (modelSampleMaterialEmission(mat, uv, &sample))
-				emission = sample;
-		}
-		// Using barycentrics should be more precise than "origin + dir * rh.ray.tfar".
-		const bx::Vec3 hitPos = v0.pos + (v1.pos - v0.pos) * rh.hit.u + (v2.pos - v0.pos) * rh.hit.v;
-		const bx::Vec3 hitNormal = bx::normalize(bx::Vec3(rh.hit.Ng_x, rh.hit.Ng_y, rh.hit.Ng_z));
-		return emission + diffuse * bakeTraceRay(hitPos, randomDirHemisphere(texel.numPathsTraced, texel.randomOffset, hitNormal), texel, depth + 1, near);
-	}
-	return bx::Vec3(0.0f);
-}
-
 static void bakeTraceRaysTask(uint32_t start, uint32_t end, uint32_t /*threadIndex*/, void * /*args*/)
 {
 	const float kNear = 0.01f * modelGetScale();
+	// Initialize paths.
 	for (uint32_t i = start; i < end; i++) {
-		const SampleLocation &sample = s_bake.sampleLocations[s_bake.sampleLocationRanks[i]];
 		TexelData &texel = s_bake.texels[i];
-		const bx::Vec3 dir = randomDirHemisphere(texel.numPathsTraced, texel.randomOffset, sample.normal);
-		const bx::Vec3 color = bakeTraceRay(sample.pos, dir, texel, 0, kNear);
+		const SampleLocation &sample = s_bake.sampleLocations[s_bake.sampleLocationRanks[i]];
+		bx::Vec3 color = bx::Vec3(0.0f);
+		bx::Vec3 throughput = bx::Vec3(1.0f);
+		bx::Vec3 rayOrigin = sample.pos;
+		bx::Vec3 rayDir = randomDirHemisphere(texel.numPathsTraced, texel.randomOffset, sample.normal);
+		for (int depth = 0; depth < s_bake.options.maxDepth; depth++) {
+			RTCIntersectContext context;
+			rtcInitIntersectContext(&context);
+			alignas(16) RTCRayHit rh;
+			rh.ray.org_x = rayOrigin.x;
+			rh.ray.org_y = rayOrigin.y;
+			rh.ray.org_z = rayOrigin.z;
+			rh.ray.tnear = kNear;
+			rh.ray.dir_x = rayDir.x;
+			rh.ray.dir_y = rayDir.y;
+			rh.ray.dir_z = rayDir.z;
+			rh.ray.time = 0.0f;
+			rh.ray.tfar = FLT_MAX;
+			rh.ray.mask = UINT32_MAX;
+			rh.ray.id = 0;
+			rh.ray.flags = 0;
+			rh.hit.primID = RTC_INVALID_GEOMETRY_ID;
+			rh.hit.geomID = RTC_INVALID_GEOMETRY_ID;
+			embree::Intersect1(s_bake.embreeScene, &context, &rh);
+			s_bake.numRaysTraced++;
+			texel.numPathsTraced++;
+			if (rh.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
+				// Ray missed, use sky color.
+				color = color + (throughput * s_bake.options.skyColor);
+				break;
+			}
+			const uint32_t *indices = atlasGetIndices()->data();
+			const ModelVertex *vertices = atlasGetVertices()->data();
+			const ModelVertex &v0 = vertices[indices[rh.hit.primID * 3 + 0]];
+			const ModelVertex &v1 = vertices[indices[rh.hit.primID * 3 + 1]];
+			const ModelVertex &v2 = vertices[indices[rh.hit.primID * 3 + 2]];
+			// we got a new ray bounced from the surface; recursively trace it
+			bx::Vec3 diffuse = bx::Vec3(0.5f);
+			bx::Vec3 emission(0.0f);
+			const objzMaterial *mat = s_bake.triMaterials[rh.hit.primID];
+			if (mat) {
+				diffuse = bx::Vec3(mat->diffuse[0], mat->diffuse[1], mat->diffuse[2]);
+				emission = bx::Vec3(mat->emission[0], mat->emission[1], mat->emission[2]);
+				float uv[2];
+				for (int j = 0; j < 2; j++)
+					uv[j] = v0.texcoord[j] + (v1.texcoord[j] - v0.texcoord[j]) * rh.hit.u + (v2.texcoord[j] - v0.texcoord[j]) * rh.hit.v;
+				bx::Vec3 texelColor;
+				if (modelSampleMaterialDiffuse(mat, uv, &texelColor))
+					diffuse = diffuse * texelColor;
+				if (modelSampleMaterialEmission(mat, uv, &texelColor))
+					emission = texelColor;
+			}
+			if (emission.x > 0.0f || emission.y > 0.0f || emission.z > 0.0f)
+				color = color + (throughput * emission);
+			else
+				throughput = throughput * diffuse;
+			// Russian Roulette
+			// https://computergraphics.stackexchange.com/questions/2316/is-russian-roulette-really-the-answer
+			const float p = bx::max(throughput.x, bx::max(throughput.y, throughput.z));
+			if (bx::frnd(&s_rng) > p)
+				break;
+			throughput = throughput * (1.0f / p);
+			if (depth + 1 < s_bake.options.maxDepth) {
+				// Using barycentrics should be more precise than "origin + dir * rh.ray.tfar".
+				rayOrigin = v0.pos + (v1.pos - v0.pos) * rh.hit.u + (v2.pos - v0.pos) * rh.hit.v;
+				const bx::Vec3 normal = bx::normalize(bx::Vec3(rh.hit.Ng_x, rh.hit.Ng_y, rh.hit.Ng_z));
+				rayDir = randomDirHemisphere(texel.numPathsTraced, texel.randomOffset, normal);
+			}
+		}
 		texel.accumColor = texel.accumColor + color;
 		texel.numColorSamples++;
+	}
+	// Copy texel data to lightmap.
+	for (uint32_t i = start; i < end; i++) {
+		TexelData &texel = s_bake.texels[i];
+		const SampleLocation &sample = s_bake.sampleLocations[s_bake.sampleLocationRanks[i]];
 		float *rgba = &s_bake.lightmapData[(sample.uv[0] + sample.uv[1] * s_bake.lightmapWidth) * 4];
-		rgba[0] = texel.accumColor.x / (float)texel.numColorSamples;
-		rgba[1] = texel.accumColor.y / (float)texel.numColorSamples;
-		rgba[2] = texel.accumColor.z / (float)texel.numColorSamples;
+		const float invn = 1.0f / (float)texel.numColorSamples;
+		rgba[0] = texel.accumColor.x * invn;
+		rgba[1] = texel.accumColor.y * invn;
+		rgba[2] = texel.accumColor.z * invn;
 		rgba[3] = 1.0f;
-		s_bake.numSampleLocationsProcessed++;
-		if (s_bake.stopWorker || s_bake.cancelWorker)
-			break;
 	}
 }
 
 static bool bakeTraceRays()
 {
 	s_bake.rng.reset();
-	s_bake.numSampleLocationsProcessed = 0;
 	s_bake.numRaysTraced = 0;
 	s_bake.lightmapData.resize(s_bake.lightmapWidth * s_bake.lightmapHeight * 4);
 	memset(s_bake.lightmapData.data(), 0, s_bake.lightmapData.size() * sizeof(float));
@@ -640,8 +683,12 @@ static bool bakeTraceRays()
 	const clock_t start = clock();
 	s_bake.samplesPerTexelCount = 0;
 	for (;;) {
+#if 0
+		bakeTraceRaysTask(0, (int32_t)s_bake.sampleLocations.size(), 0, nullptr);
+#else
 		enkiAddTaskSetToPipe(s_bake.taskScheduler, task, 0, (int32_t)s_bake.sampleLocations.size());
 		enkiWaitForTaskSet(s_bake.taskScheduler, task);
+#endif
 		if (s_bake.cancelWorker)
 			break;
 		s_bake.samplesPerTexelCount++;
@@ -725,7 +772,7 @@ static bool emptyFilterSamplePredicate(const float * /*data*/, uint32_t offset, 
 static bool bilinearFilterWritePredicate(const float * /*data*/, uint32_t offset)
 {
 	// Only write to texels sampled by bilinear interpolation..
-	return atlasGetImage()[offset] & xatlas::kImageIsBilinearBit;
+	return (atlasGetImage()[offset] & xatlas::kImageIsBilinearBit) != 0;
 }
 
 static bool bilinearFilterSamplePredicate(const float * /*data*/, uint32_t offset, uint32_t chart)
@@ -857,7 +904,7 @@ static void bakeDenoiseThread()
 	oidn::SetDeviceErrorFunction(device, bakeOidnError, nullptr);
 	oidn::SetDevice1b(device, "setAffinity", false);
 	oidn::CommitDevice(device);
-	OIDNFilter filter = oidn::NewFilter(device, "RT");
+	OIDNFilter filter = oidn::NewFilter(device, "RTLightmap");
 	oidn::SetFilterProgressMonitorFunction(filter, bakeOidnProgress, nullptr);
 	oidn::SetSharedFilterImage(filter, "color", s_bake.lightmapData.data(), OIDN_FORMAT_FLOAT3, s_bake.lightmapWidth, s_bake.lightmapHeight, 0, sizeof(float) * 4, 0);
 	oidn::SetSharedFilterImage(filter, "output", s_bake.denoisedLightmapData.data(), OIDN_FORMAT_FLOAT3, s_bake.lightmapWidth, s_bake.lightmapHeight, 0, sizeof(float) * 4, 0);
@@ -898,7 +945,7 @@ void bakeInit()
 	s_bake.updateStatus = UpdateStatus::Idle;
 	s_bake.stopWorker = false;
 	s_bake.taskScheduler = enkiNewTaskScheduler();
-	enkiInitTaskScheduler(s_bake.taskScheduler);
+	enkiInitTaskSchedulerNumThreads(s_bake.taskScheduler, std::thread::hardware_concurrency());
 }
 
 void bakeShutdown()
@@ -1034,7 +1081,7 @@ void bakeShowGuiOptions()
 		}
 		ImGui::Columns(2, nullptr, false);
 		guiColumnColorEdit("Sky color", "##skyColor", &s_bake.options.skyColor.x);
-		guiColumnSliderInt("Max depth", "##maxDepth", &s_bake.options.maxDepth, 1, 16);
+		guiColumnSliderInt("Max depth", "##maxDepth", &s_bake.options.maxDepth, 1, kMaxDepth);
 		ImGui::Columns(1);
 		std::lock_guard<std::mutex> lock(s_bake.errorMessageMutex);
 		if (s_bake.errorMessage[0]) {
@@ -1076,14 +1123,10 @@ void bakeShowGuiOptions()
 #endif
 }
 
-void bakeShowGuiWindow(float menuBarHeight)
+void bakeShowGuiWindow()
 {
 	if (s_bake.status == BakeStatus::Idle || s_bake.status == BakeStatus::InitEmbree || s_bake.status == BakeStatus::Error || !g_options.showLightmapWindow)
 		return;
-	const float size = 500;
-	const float margin = 4.0f;
-	ImGui::SetNextWindowPos(ImVec2(g_windowSize[0] - size - margin, menuBarHeight + size + margin * 2.0f), ImGuiCond_FirstUseEver);
-	ImGui::SetNextWindowSize(ImVec2(size, size), ImGuiCond_FirstUseEver);
 	if (ImGui::Begin("Lightmap", &g_options.showLightmapWindow, ImGuiWindowFlags_HorizontalScrollbar)) {
 		ImGui::Checkbox("Fit to window", &s_bake.options.fitToWindow);
 		if (!s_bake.options.fitToWindow) {
@@ -1095,8 +1138,14 @@ void bakeShowGuiWindow(float menuBarHeight)
 		GuiTexture texture;
 		texture.bgfx.handle = bakeGetLightmap();
 		texture.bgfx.flags = GuiTextureFlags::PointSampler;
-		if (s_bake.options.fitToWindow)
-			ImGui::Image(texture.imgui, ImGui::GetContentRegionAvail());
+		if (s_bake.options.fitToWindow) {
+			// Fit to content while maintaining aspect ratio.
+			ImVec2 size((float)s_bake.lightmapWidth, (float)s_bake.lightmapHeight);
+			const float scale = bx::min(ImGui::GetContentRegionAvail().x / size.x, ImGui::GetContentRegionAvail().y / size.y);
+			size.x *= scale;
+			size.y *= scale;
+			ImGui::Image(texture.imgui, size);
+		}
 		else
 			ImGui::Image(texture.imgui, ImVec2((float)s_bake.lightmapWidth * s_bake.options.scale, (float)s_bake.lightmapHeight * s_bake.options.scale));
 		ImGui::End();

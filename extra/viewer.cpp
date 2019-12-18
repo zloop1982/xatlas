@@ -50,7 +50,7 @@ bool Spinner(const char* label, float radius, float thickness, const ImU32& colo
 	window->DrawList->PathClear();
 
 	int num_segments = 30;
-	int start = (int)abs(ImSin((float)g.Time*1.8f)*(num_segments-5));
+	int start = (int)fabsf(ImSin((float)g.Time*1.8f)*(num_segments-5));
 
 	const float a_min = IM_PI*2.0f * ((float)start) / (float)num_segments;
 	const float a_max = IM_PI*2.0f * ((float)num_segments-3) / (float)num_segments;
@@ -77,7 +77,7 @@ bool Spinner(const char* label)
 #define WINDOW_DEFAULT_WIDTH 1920
 #define WINDOW_DEFAULT_HEIGHT 1080
 
-bgfx::VertexDecl WireframeVertex::decl;
+bgfx::VertexLayout WireframeVertex::layout;
 Options g_options;
 GLFWwindow *g_window;
 int g_windowSize[2];
@@ -329,12 +329,13 @@ struct ShaderSourceBundle
 	ShaderSource d3d11;
 #endif
 	ShaderSource gl;
+	ShaderSource vk;
 };
 
 #if BX_PLATFORM_WINDOWS
-#define SHADER_SOURCE_BUNDLE(name) { BX_STRINGIZE(name), { name##_d3d11, sizeof(name##_d3d11) }, { name##_gl, sizeof(name##_gl) }}
+#define SHADER_SOURCE_BUNDLE(name) { BX_STRINGIZE(name), { name##_d3d11, sizeof(name##_d3d11) }, { name##_gl, sizeof(name##_gl) }, { name##_vk, sizeof(name##_vk) }}
 #else
-#define SHADER_SOURCE_BUNDLE(name) { BX_STRINGIZE(name), { name##_gl, sizeof(name##_gl) }}
+#define SHADER_SOURCE_BUNDLE(name) { BX_STRINGIZE(name), { name##_gl, sizeof(name##_gl) }, { name##_vk, sizeof(name##_vk) }}
 #endif
 
 // Sync with ShaderId
@@ -364,6 +365,8 @@ bgfx::ShaderHandle loadShader(ShaderId id)
 	else if (bgfx::getRendererType() == bgfx::RendererType::Direct3D11)
 		source = sourceBundle.d3d11;
 #endif
+	else if (bgfx::getRendererType() == bgfx::RendererType::Vulkan)
+		source = sourceBundle.vk;
 	else {
 		fprintf(stderr, "Unsupported renderer type.");
 		exit(EXIT_FAILURE);
@@ -500,6 +503,7 @@ int main(int argc, char **argv)
 		modelOpen(argv[1]);
 	double lastFrameTime = glfwGetTime();
 	uint32_t bgfxFrameNo = 0;
+	bool initDockLayout = true;
 	while (!glfwWindowShouldClose(g_window)) {
 		glfwPollEvents();
 		while (glfwGetWindowAttrib(g_window, GLFW_ICONIFIED)) {
@@ -565,7 +569,27 @@ int main(int argc, char **argv)
 				}
 				ImGui::EndPopup();
 			}
-			float menuBarHeight = 0.0f;
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+			ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+			ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+			ImGui::SetNextWindowSize(io.DisplaySize);
+			ImGui::SetNextWindowBgAlpha(0.0f);
+			ImGui::Begin("DockSpaceWindow", nullptr, ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus);
+			ImGui::PopStyleVar(3);
+			ImGuiID dockSpaceId = ImGui::GetID("DockSpace");
+			ImGui::DockSpace(dockSpaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+			const char *atlasOptionsWindowName = ICON_FA_GLOBE "Atlas Options";
+			if (initDockLayout) {
+				ImGuiID dockLeftId = ImGui::DockBuilderSplitNode(dockSpaceId, ImGuiDir_Left, 0.20f, nullptr, &dockSpaceId);
+				ImGuiID dockRightId = ImGui::DockBuilderSplitNode(dockSpaceId, ImGuiDir_Right, 0.30f, nullptr, &dockSpaceId);
+				ImGuiID dockRightBottomId = ImGui::DockBuilderSplitNode(dockRightId, ImGuiDir_Down, 0.50f, nullptr, &dockRightId);
+				ImGui::DockBuilderDockWindow(atlasOptionsWindowName, dockLeftId);
+				ImGui::DockBuilderDockWindow("Atlas", dockRightId);
+				ImGui::DockBuilderDockWindow("Lightmap", dockRightBottomId);
+				ImGui::DockBuilderFinish(dockSpaceId);
+				initDockLayout = false;
+			}
 			ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5.0f, 5.0f));
 			if (ImGui::BeginMainMenuBar()) {
 				ImGui::PopStyleVar();
@@ -644,6 +668,7 @@ int main(int argc, char **argv)
 				}
 				if (atlasIsReady() || bakeIsLightmapReady()) {
 					if (ImGui::BeginMenu(ICON_FA_WINDOWS " Window")) {
+						ImGui::MenuItem("Atlas Options", nullptr, &g_options.showAtlasOptionsWindow);
 						if (atlasIsReady())
 							ImGui::MenuItem("Atlas", nullptr, &g_options.showAtlasWindow);
 						if (bakeIsLightmapReady())
@@ -651,16 +676,12 @@ int main(int argc, char **argv)
 						ImGui::EndMenu();
 					}
 				}
-				menuBarHeight = ImGui::GetWindowHeight();
 				ImGui::EndMainMenuBar();
 			} else {
 				ImGui::PopStyleVar();
 			}
-			const float margin = 4.0f;
-			ImGui::SetNextWindowPos(ImVec2(margin, menuBarHeight + margin), ImGuiCond_FirstUseEver);
-			ImGui::SetNextWindowSize(ImVec2(425.0f, io.DisplaySize.y - menuBarHeight - margin * 2.0f), ImGuiCond_FirstUseEver);
-			if (ImGui::Begin("##mainWindow", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse)) {
-				const ImVec2 buttonSize(ImVec2(ImGui::GetContentRegionAvailWidth() * 0.35f, 0.0f));
+			ImGui::End(); // DockSpaceWindow
+			if (ImGui::Begin(atlasOptionsWindowName, &g_options.showAtlasOptionsWindow)) {
 				ImGui::PushItemWidth(ImGui::GetWindowWidth() * 0.5f);
 				if (modelIsLoaded()) {
 					atlasShowGuiOptions();
@@ -675,8 +696,8 @@ int main(int argc, char **argv)
 				ImGui::End();
 			}
 			modelShowGuiWindow();
-			atlasShowGuiWindow(menuBarHeight);
-			bakeShowGuiWindow(menuBarHeight);
+			atlasShowGuiWindow();
+			bakeShowGuiWindow();
 		}
 		modelRender(view, projection);
 		bakeFrame(bgfxFrameNo);

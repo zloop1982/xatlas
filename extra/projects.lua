@@ -7,6 +7,7 @@ local EMBREE_DIR = path.join(THIRDPARTY_DIR, "embree3")
 local ENKITS_DIR = path.join(THIRDPARTY_DIR, "enkiTS")
 local GLFW_DIR = path.join(THIRDPARTY_DIR, "glfw")
 local IGL_DIR = path.join(THIRDPARTY_DIR, "libigl")
+local MIMALLOC_DIR = path.join(THIRDPARTY_DIR, "mimalloc")
 local OIDN_DIR = path.join(THIRDPARTY_DIR, "oidn")
 local OPENFBX_DIR = path.join(THIRDPARTY_DIR, "OpenFBX")
 local OPENNL_DIR = path.join(THIRDPARTY_DIR, "OpenNL")
@@ -18,22 +19,12 @@ project "example"
 	exceptionhandling "Off"
 	rtti "Off"
 	warnings "Extra"
+	sanitizer()
 	files "example.cpp"
 	includedirs(THIRDPARTY_DIR)
 	links { "stb_image_write", "tiny_obj_loader", "xatlas" }
-	filter "system:linux"
-		links { "pthread" }
-		
-project "example_repack"
-	kind "ConsoleApp"
-	language "C++"
-	cppdialect "C++11"
-	exceptionhandling "Off"
-	rtti "Off"
-	warnings "Extra"
-	files "example_repack.cpp"
-	includedirs(THIRDPARTY_DIR)
-	links { "stb_image", "stb_image_write", "objzero", "xatlas" }
+	filter "action:vs*"
+		files "xatlas.natvis"
 	filter "system:linux"
 		links { "pthread" }
 		
@@ -44,9 +35,12 @@ project "example_uvmesh"
 	exceptionhandling "Off"
 	rtti "Off"
 	warnings "Extra"
+	sanitizer()
 	files "example_uvmesh.cpp"
 	includedirs(THIRDPARTY_DIR)
 	links { "stb_image_write", "tiny_obj_loader", "xatlas" }
+	filter "action:vs*"
+		files "xatlas.natvis"
 	filter "system:linux"
 		links { "pthread" }
 
@@ -57,9 +51,12 @@ project "test"
 	exceptionhandling "Off"
 	rtti "Off"
 	warnings "Extra"
+	sanitizer()
 	includedirs(THIRDPARTY_DIR)
 	files "test.cpp"
 	links { "tiny_obj_loader", "xatlas" }
+	filter "action:vs*"
+		files "xatlas.natvis"
 	filter "system:linux"
 		links { "pthread" }
 
@@ -70,6 +67,7 @@ project "viewer"
 	exceptionhandling "Off"
 	rtti "Off"
 	warnings "Extra"
+	sanitizer()
 	files { "viewer*", "shaders/*.*" }
 	includedirs
 	{
@@ -81,16 +79,18 @@ project "viewer"
 		ENKITS_DIR,
 		path.join(GLFW_DIR, "include"),
 		path.join(IGL_DIR, "include"),
+		path.join(MIMALLOC_DIR, "include"),
 		path.join(OIDN_DIR, "include"),
 		OPENFBX_DIR,
 		OPENNL_DIR
 	}
-	links { "bgfx", "bimg", "bx", "cgltf", "enkiTS", "glfw", "imgui", "nativefiledialog", "objzero", "OpenFBX", "OpenNL", "stb_image", "stb_image_resize", "xatlas" }
+	links { "bgfx", "bimg", "bx", "cgltf", "enkiTS", "glfw", "imgui", "mimalloc", "nativefiledialog", "objzero", "OpenFBX", "OpenNL", "stb_image", "stb_image_resize", "xatlas" }
 	filter "system:windows"
 		links { "gdi32", "ole32", "psapi", "uuid" }
 	filter "system:linux"
 		links { "dl", "GL", "gtk-3", "gobject-2.0", "glib-2.0", "pthread", "X11", "Xcursor", "Xinerama", "Xrandr" }
 	filter "action:vs*"
+		files "xatlas.natvis"
 		includedirs { path.join(BX_DIR, "include/compat/msvc") }
 	filter { "system:windows", "action:gmake" }
 		includedirs { path.join(BX_DIR, "include/compat/mingw") }
@@ -103,6 +103,7 @@ project "bgfx"
 	cppdialect "C++14"
 	exceptionhandling "Off"
 	rtti "Off"
+	sanitizer()
 	defines	{ "__STDC_FORMAT_MACROS" }
 	files
 	{
@@ -145,6 +146,7 @@ project "bimg"
 	cppdialect "C++14"
 	exceptionhandling "Off"
 	rtti "Off"
+	sanitizer()
 	files
 	{
 		path.join(BIMG_DIR, "include/bimg/*.h"),
@@ -168,6 +170,7 @@ project "bx"
 	cppdialect "C++14"
 	exceptionhandling "Off"
 	rtti "Off"
+	sanitizer()
 	defines	{ "__STDC_FORMAT_MACROS" }
 	files
 	{
@@ -195,6 +198,7 @@ project "bx"
 project "cgltf"
 	kind "StaticLib"
 	language "C"
+	sanitizer()
 	files(path.join(THIRDPARTY_DIR, "cgltf.*"))
 	filter "action:vs*"
 		defines { "_CRT_SECURE_NO_WARNINGS" }
@@ -205,11 +209,13 @@ project "enkiTS"
 	cppdialect "C++11"
 	exceptionhandling "Off"
 	rtti "Off"
+	sanitizer()
 	files(path.join(ENKITS_DIR, "*.*"))
 
 project "glfw"
 	kind "StaticLib"
 	language "C"
+	sanitizer()
 	files
 	{
 		path.join(GLFW_DIR, "include/*.h"),
@@ -254,13 +260,28 @@ project "imgui"
 	language "C++"
 	exceptionhandling "Off"
 	rtti "Off"
+	sanitizer()
 	files(path.join(THIRDPARTY_DIR, "imgui/*.*"))
+	
+project "mimalloc"
+	kind "StaticLib"
+	language "C"
+	sanitizer()
+	includedirs(path.join(MIMALLOC_DIR, "include"))
+	files(path.join(MIMALLOC_DIR, "src/*.*"))
+	excludes
+	{
+		path.join(MIMALLOC_DIR, "src/alloc-override*"),
+		path.join(MIMALLOC_DIR, "src/page-queue.c"),
+		path.join(MIMALLOC_DIR, "src/static.c")
+	}
 	
 project "nativefiledialog"
 	kind "StaticLib"
 	language "C++"
 	exceptionhandling "Off"
 	rtti "Off"
+	sanitizer()
 	files(path.join(THIRDPARTY_DIR, "nativefiledialog/nfd_common.*"))
 	filter "system:windows"
 		files(path.join(THIRDPARTY_DIR, "nativefiledialog/nfd_win.cpp"))
@@ -274,6 +295,7 @@ project "objzero"
 	kind "StaticLib"
 	language "C"
 	cdialect "C99"
+	sanitizer()
 	files(path.join(THIRDPARTY_DIR, "objzero/objzero.*"))
 	
 project "OpenFBX"
@@ -282,11 +304,13 @@ project "OpenFBX"
 	cppdialect "C++14"
 	exceptionhandling "Off"
 	rtti "Off"
+	sanitizer()
 	files(path.join(OPENFBX_DIR, "*.*"))
 	
 project "OpenNL"
 	kind "StaticLib"
 	language "C"
+	sanitizer()
 	defines { "GEO_STATIC_LIBS" }
 	files(path.join(OPENNL_DIR, "*"))
 	filter "system:windows"
@@ -297,16 +321,19 @@ project "OpenNL"
 project "stb_image"
 	kind "StaticLib"
 	language "C"
+	sanitizer()
 	files(path.join(THIRDPARTY_DIR, "stb_image.*"))
 	
 project "stb_image_resize"
 	kind "StaticLib"
 	language "C"
+	sanitizer()
 	files(path.join(THIRDPARTY_DIR, "stb_image_resize.*"))
 	
 project "stb_image_write"
 	kind "StaticLib"
 	language "C"
+	sanitizer()
 	files(path.join(THIRDPARTY_DIR, "stb_image_write.*"))
 	
 project "tiny_obj_loader"
@@ -314,4 +341,5 @@ project "tiny_obj_loader"
 	language "C++"
 	exceptionhandling "Off"
 	rtti "Off"
+	sanitizer()
 	files(path.join(THIRDPARTY_DIR, "tiny_obj_loader.*"))

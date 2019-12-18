@@ -62,7 +62,7 @@ void atlasFinalize();
 void atlasRenderCharts(const float *modelMatrix, uint64_t state);
 void atlasRenderChartsWireframe(const float *modelMatrix);
 void atlasShowGuiOptions();
-void atlasShowGuiWindow(float menuBarHeight);
+void atlasShowGuiWindow();
 uint32_t atlasGetCount();
 uint32_t atlasGetWidth();
 uint32_t atlasGetHeight();
@@ -81,7 +81,7 @@ void bakeExecute();
 void bakeFrame(uint32_t frameNo);
 void bakeClear();
 void bakeShowGuiOptions();
-void bakeShowGuiWindow(float menuBarHeight);
+void bakeShowGuiWindow();
 bgfx::TextureHandle bakeGetLightmap();
 uint32_t bakeGetLightmapSamplerFlags();
 bool bakeIsLightmapReady();
@@ -122,16 +122,16 @@ struct ModelVertex
 	bx::Vec3 pos;
 	bx::Vec3 normal;
 	float texcoord[4];
-	static bgfx::VertexDecl decl;
+	static bgfx::VertexLayout layout;
 
 	static void init()
 	{
-		decl.begin()
+		layout.begin()
 			.add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
 			.add(bgfx::Attrib::Normal, 3, bgfx::AttribType::Float)
 			.add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float)
 			.end();
-		assert(decl.getStride() == sizeof(ModelVertex));
+		assert(layout.getStride() == sizeof(ModelVertex));
 	}
 };
 
@@ -183,6 +183,7 @@ struct Options
 	int chartCellSize = 1;
 	bool lightmapPointSampling = false;
 	bool useDenoisedLightmap = true;
+	bool showAtlasOptionsWindow = true;
 	bool showAtlasWindow = true;
 	bool showLightmapWindow = true;
 };
@@ -223,15 +224,15 @@ struct WireframeVertex
 {
 	bx::Vec3 pos;
 	bx::Vec3 barycentric;
-	static bgfx::VertexDecl decl;
+	static bgfx::VertexLayout layout;
 
 	static void init()
 	{
-		decl.begin()
+		layout.begin()
 			.add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
 			.add(bgfx::Attrib::TexCoord0, 3, bgfx::AttribType::Float)
 			.end();
-		assert(decl.getStride() == sizeof(WireframeVertex));
+		assert(layout.getStride() == sizeof(WireframeVertex));
 	}
 };
 

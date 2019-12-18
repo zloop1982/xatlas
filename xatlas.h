@@ -35,11 +35,14 @@ Copyright NVIDIA Corporation 2006 -- Ignacio Castano <icastano@nvidia.com>
 
 namespace xatlas {
 
-struct ChartFlags
+struct ChartType
 {
-	enum
+	enum Enum
 	{
-		Invalid = 1 << 0
+		Planar,
+		Ortho,
+		LSCM,
+		Piecewise
 	};
 };
 
@@ -47,10 +50,10 @@ struct ChartFlags
 struct Chart
 {
 	uint32_t atlasIndex; // Sub-atlas index.
-	uint32_t flags;
 	uint32_t *faceArray;
 	uint32_t faceCount;
 	uint32_t material;
+	ChartType::Enum type;
 };
 
 // Output vertex.
@@ -174,7 +177,6 @@ struct ChartOptions
 	float textureSeamMetricWeight = 0.5f;
 
 	float maxThreshold = 2.0f; // If total of all metrics * weights > maxThreshold, don't grow chart. Lower values result in more charts.
-	uint32_t growFaceCount = 32; // Grow this many faces at a time.
 	uint32_t maxIterations = 1; // Number of iterations of the chart growing and seeding phases. Higher values result in better charts.
 };
 
@@ -244,7 +246,8 @@ void SetProgressCallback(Atlas *atlas, ProgressFunc progressFunc = nullptr, void
 
 // Custom memory allocation.
 typedef void *(*ReallocFunc)(void *, size_t);
-void SetRealloc(ReallocFunc reallocFunc);
+typedef void (*FreeFunc)(void *);
+void SetAlloc(ReallocFunc reallocFunc, FreeFunc freeFunc = nullptr);
 
 // Custom print function.
 typedef int (*PrintFunc)(const char *, ...);

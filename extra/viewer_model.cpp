@@ -30,7 +30,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 #define ONE_GLTF_OBJECT_PER_MESH 0
 
-bgfx::VertexDecl ModelVertex::decl;
+bgfx::VertexLayout ModelVertex::layout;
 
 enum class ModelStatus
 {
@@ -293,7 +293,7 @@ static objzModel *fbxLoad(const char *filename, const char * /*basePath*/)
 	std::vector<uint8_t> fileData;
 	if (!readFileData(filename, &fileData))
 		return nullptr;
-	ofbx::IScene *scene = ofbx::load(fileData.data(), (int)fileData.size(), ofbx::LoadFlags::TRIANGULATE);
+	ofbx::IScene *scene = ofbx::load(fileData.data(), (int)fileData.size(), (ofbx::u64)ofbx::LoadFlags::TRIANGULATE);
 	if (!scene) {
 		fprintf(stderr, "%s\n", ofbx::getError());
 		return nullptr;
@@ -730,7 +730,8 @@ static void modelLoadThread(ModelLoadThreadArgs args)
 				break;
 		}
 	}
-	const bx::StringView ext = bx::FilePath(args.filename).getExt();
+    bx::FilePath filePath(args.filename);
+	const bx::StringView ext = filePath.getExt();
 	if (bx::strCmpI(ext, ".fbx") == 0) {
 		objzModel *model = fbxLoad(args.filename, basePath);
 		if (!model) {
@@ -844,9 +845,9 @@ void modelFinalize()
 		}
 	}
 	s_model.centroid = bx::mul(s_model.centroid, 1.0f / centroidCount);
-	s_model.vb = bgfx::createVertexBuffer(bgfx::makeRef(s_model.data->vertices, s_model.data->numVertices * sizeof(ModelVertex)), ModelVertex::decl);
+	s_model.vb = bgfx::createVertexBuffer(bgfx::makeRef(s_model.data->vertices, s_model.data->numVertices * sizeof(ModelVertex)), ModelVertex::layout);
 	s_model.ib = bgfx::createIndexBuffer(bgfx::makeRef(s_model.data->indices, s_model.data->numIndices * sizeof(uint32_t)), BGFX_BUFFER_INDEX32);
-	s_model.wireframeVb = bgfx::createVertexBuffer(bgfx::makeRef(s_model.wireframeVertices.data(), uint32_t(s_model.wireframeVertices.size() * sizeof(WireframeVertex))), WireframeVertex::decl);
+	s_model.wireframeVb = bgfx::createVertexBuffer(bgfx::makeRef(s_model.wireframeVertices.data(), uint32_t(s_model.wireframeVertices.size() * sizeof(WireframeVertex))), WireframeVertex::layout);
 	resetCamera();
 	g_options.shadeMode = ShadeMode::Flat;
 	g_options.wireframeMode = WireframeMode::Triangles;
@@ -884,7 +885,10 @@ void modelOpenDialog()
 	nfdchar_t *filename = nullptr;
 	nfdresult_t result = NFD_OpenDialog("fbx,glb,gltf,obj,stl", nullptr, &filename);
 	if (result != NFD_OKAY)
+    {
+	    free(filename);
 		return;
+    }
 	modelOpen(filename);
 	free(filename);
 }
